@@ -138,7 +138,7 @@ def main(argv):
                  choices=['connect', 'connections', 'replication_lag', 'replication_lag_percent', 'replset_state', 'memory', 'memory_mapped', 'lock',
                           'flushing', 'last_flush_time', 'index_miss_ratio', 'databases', 'collections', 'database_size', 'database_indexes', 'collection_documents', 'collection_indexes', 'collection_size',
                           'collection_storageSize', 'queues', 'oplog', 'journal_commits_in_wl', 'write_data_files', 'journaled', 'opcounters', 'current_lock', 'replica_primary',
-                          'page_faults', 'asserts', 'queries_per_second', 'page_faults', 'chunks_balance', 'connect_primary', 'collection_state', 'row_count', 'replset_quorum'])
+                          'page_faults', 'asserts', 'queries_per_second', 'page_faults', 'chunks_balance', 'connect_primary', 'collection_state', 'row_count', 'replset_quorum', 'databases_fragmentation'])
     p.add_option('--max-lag', action='store_true', dest='max_lag', default=False, help='Get max replication lag (for replication_lag action only)')
     p.add_option('--mapped-memory', action='store_true', dest='mapped_memory', default=False, help='Get mapped memory instead of resident (if resident memory can not be read)')
     p.add_option('-D', '--perf-data', action='store_true', dest='perf_data', default=False, help='Enable output of Nagios performance data')
@@ -279,6 +279,8 @@ def main(argv):
         return check_row_count(con, database, collection, warning, critical, perf_data)
     elif action == "replset_quorum":
         return check_replset_quorum(con, perf_data)
+    elif action == "databases_fragmentation":
+        return check_databases_fragmentation(con, host, warning, critical, perf_data)
     else:
         return check_connect(host, port, warning, critical, perf_data, user, passwd, conn_time)
 
@@ -1633,6 +1635,39 @@ def replication_get_time_diff(con):
     tlast = last["ts"]
     delta = tlast.time - tfirst.time
     return delta
+
+
+def check_databases_fragmentation(con, host, warning, critical, perf_data):
+    """ A function to check if the primary server of a replica set has changed """
+    warning = warning or 2
+    critical = critical or 1000
+    try:
+        try:
+            set_read_preference(con.admin)
+            all_dbs_data = con.admin.command(pymongo340.son_manipulator.SON([('listDatabases', 1)]))
+        except:
+            all_dbs_data = con.admin.command(son.SON([('listDatabases', 1)]))
+
+        total_storage_size = 0
+        total_database_size = 0
+        message = ""
+        perf_data_param = [()]
+        for db in all_dbs_data['databases']:
+            database = db['name']
+            data = con[database].command('dbstats')
+            storage_size = round(data['storageSize'] / 1024 / 1024, 1)
+            database_size = round(data['dataSize'] / 1024 / 1024, 1)
+            total_storage_size += storage_size
+            total_database_size += database_size
+
+        if total_storage_size / total_database_size > warning:
+            print "WARNING - %s fragmentation larger than dataSize|total_storage_size= %.0f MB total_database_size= %.0f MB" % (host, total_storage_size, total_database_size)
+            return 1
+        else:
+            print "OK - %s fragmentation smaller than dataSize|total_storage_size= %.0f MB total_database_size= %.0f MB" % (host, total_storage_size, total_database_size)
+            return 0
+    except Exception, e:
+        return exit_with_general_critical(e)
 
 #
 # main app
